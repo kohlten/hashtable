@@ -1,18 +1,10 @@
-import std.stdio : writeln;
+import std.stdio : writeln, stdout;
 import core.stdc.stdlib;
-import std.random : uniform;
-import std.array : split;
-import std.file;
 import std.string : toStringz;
+import std.typecons;
+import linkedList;
 
 //http://www.azillionmonkeys.com/qed/hash.html
-
-string readFile(string filename)
-{
-	if (exists(filename) && isFile(filename))
-		return readText(filename);
-	throw new Exception("Failed to open file");
-}
 
 ulong get16Bits(char *d)
 {
@@ -71,196 +63,214 @@ ulong superFastHash(char *data, ulong len)
 	return hash;
 }
 
-class DynamicArray(T)
-{
-	private: 
-		ulong len = 0;
-		ulong overall = 0;
-		ulong prev = 1;
-		T* arr = null;
-
-	ulong length()
-	{
-		return this.len;
-	}
-
-	ref T opIndex(ulong i)
-	{
-		assert(i < this.len, "Value is greater than the length");
-		return this.arr[i];
-	}
-
-	T append(T val)
-	{
-		if (this.arr is null)
-		{
-			this.arr = cast(T*)malloc(this.prev * T.sizeof);
-			this.prev *= 2;
-			this.overall += prev;
-		}
-		else if (len + 1 > overall)
-		{
-			this.arr = cast(T*)realloc(this.arr, (this.overall + (this.prev * 2)) * T.sizeof);
-			assert(this.arr, "Failed to allocate");
-			this.prev *= 2;
-			this.overall += prev;
-		}
-		this.arr[this.len] = val;
-		this.len++;
-		return val;
-	}
-
-	T remove(ulong i)
-	{
-		T* tmp = this.arr;
-		ulong loc;
-		T removed;
-
-		if (this.len - 1 < this.overall - (this.prev / 2))
-		{
-			free(this.arr);
-			this.prev /= 2;
-			this.overall -= prev;
-			this.arr = cast(T*)malloc(this.overall);
-		}
-		removed = tmp[i];
-		foreach (iter; 0 .. this.len)
-			if (iter != i)
-				this.arr[loc++] = tmp[iter];
-		this.len--;
-		return removed;
-	}
-
-	~this()
-	{
-		free(this.arr);
-	}
-}
-
-linkedList!T* newList(T)(string key, T val)
-{
-	linkedList!T* list = cast(linkedList!T*)malloc(linkedList!T.sizeof);
-	assert(list, "Failed to allocate");
-	list.val = val;
-	list.key = key;
-	list.next = null;
-	return list;
-}
-
-void freeList(T)(linkedList!T* list)
-{
-	while (list)
-	{
-		linkedList!T* node = list.next;
-		free(list);
-		list = node;
-	}
-	list = null;
-}
-
-struct linkedList(T)
-{
-	T val;
-	string key;
-	linkedList!T *next = null;
-
-	~this()
-	{
-		freeList(&this);
-	}
-}	
-
 class HashTable(T)
 {
-	private:
-		linkedList!T*[] arr;
-
-	this(ulong length = 50000)
+private:
+	LinkedList!(Tuple!(string, "key", T, "val"))*[] arr;
+	ulong count;
+public:
+	this(ulong length = 4)
 	{
 		this.arr.length = length;
 	}
 
 	T get(string key)
 	{
-		ulong hash = this.hash(key);
-		linkedList!T *tmp = this.arr[hash];
+		ulong hash = this.hash(key, this.arr.length);
+		LinkedList!(Tuple!(string, "key", T, "val")) *tmp = this.arr[hash];
 		while (tmp)
 		{
-			if (tmp.key == key)
-				return tmp.val;
+			if (tmp.data.key == key)
+				return tmp.data.val;
 			tmp = tmp.next;
 		}
 		assert(tmp, "Unable to find value");
-		return tmp.val;
+		return tmp.data.val;
+	}
+
+	void remove(string key)
+	{
+		ulong hash = this.hash(key, this.arr.length);
+		LinkedList!(Tuple!(string, "key", T, "val")) *tmp = this.arr[hash];
+		while (tmp)
+		{
+			if (tmp.data.key == key)
+				break;
+			tmp = tmp.next;
+		}
+		this.count--;
+		this.arr[hash] = removeListNode!(Tuple!(string, "key", T, "val"))(tmp, tmp.data);
 	}
 
 	T assign(string key, T val)
 	{
-		ulong hash = this.hash(key);
-		linkedList!T *tmp = this.arr[hash];
+		assert(key != "", "Empty key");
+		ulong hash = this.hash(key, this.arr.length);
+		LinkedList!(Tuple!(string, "key", T, "val")) *tmp = this.arr[hash];
+
 		if (!(tmp is null))
 		{
 			do
 			{
-				if (tmp.key == key)
-					assert(0, "Already exists");
+				if (tmp.data.key == key)
+				{
+					tmp.data.val = val;
+					return val;
+				}
 				if (!(tmp.next is null))
 					tmp = tmp.next;
 			} while (tmp.next);
-			tmp.next = newList(key, val);
+			tmp.next = newNode(tuple!(string, "key", T, "val")(key, val));
+			this.count++;
 		}
 		else
-			this.arr[hash] = newList(key, val);
+			this.arr[hash] = newNode(tuple!(string, "key", T, "val")(key, val));
+		if (this.count > ((this.arr.length / 4) * 3))
+			this.resize();
 		return val;
 	}
 
-	ulong hash(string key)
+	ulong hash(string key, ulong length)
 	{
 		ulong hash = superFastHash(cast(char *)key.toStringz, key.length - 1);
-		return hash % this.arr.length;
+		return hash % length;
 	}
 
-	~this()
+	string[] keys()
+	{
+		string[] listKeys;
+
+		foreach (node; this.arr)
+		{
+			auto tmp = node;
+			writeln(tmp);
+			while (tmp)
+			{
+				writeln(tmp.data.key);
+				listKeys ~= tmp.data.key;
+				tmp = tmp.next;
+			}
+		}
+		return listKeys;
+	}
+
+	T[] values()
+	{
+		T[] listValues;
+
+		foreach (node; this.arr)
+		{
+			auto tmp = node;
+			while (tmp)
+			{
+				listValues ~= tmp.data.val;
+				tmp = tmp.next;
+			}
+		}
+		return listValues;
+	}
+
+	Tuple!(string, "key", T, "val")[] items()
+	{
+		Tuple!(string, "key", T, "val")[] listItems;
+
+		foreach (node; this.arr)
+		{
+			auto tmp = node;
+			while (tmp)
+			{
+				listItems ~= tmp.data;
+				tmp = tmp.next;
+			}
+		} 
+		return listItems;
+	}
+
+	void printHash()
+	{
+		auto items = this.items();
+		stdout.write("{");
+		foreach (i; 0 .. items.length)
+		{
+			stdout.write("\"", items[i].key, "\":", items[i].val);
+			if (i < this.items.length - 1)
+				stdout.write(" ");
+		}
+		stdout.write("}\n");
+	}
+
+	ulong size()
+	{
+		return this.count;
+	}
+
+	ulong[] countArrayItems()
+	{
+		ulong[] counts;
+		ulong pos;
+
+		counts.length = this.arr.length;
+		foreach (node; this.arr)
+		{
+			auto tmp = node;
+			while (tmp)
+			{
+				counts[pos]++;
+				tmp = tmp.next;
+			}
+			pos++;
+		}
+		return counts;
+	}
+
+private:
+	T assign(string key, T val, LinkedList!(Tuple!(string, "key", T, "val"))*[] arr)
+	{
+		ulong hash = this.hash(key, arr.length);
+		LinkedList!(Tuple!(string, "key", T, "val")) *tmp = arr[hash];
+		if (!(tmp is null))
+		{
+			do
+			{
+				if (tmp.data.key == key)
+				{
+					tmp.data.val = val;
+					writeln("Found and assigned a new value");
+					return val;
+				}
+				if (!(tmp.next is null))
+					tmp = tmp.next;
+			} while (tmp.next);
+			tmp.next = newNode(tuple!(string, "key", T, "val")(key, val));
+		}
+		else
+			arr[hash] = newNode(tuple!(string, "key", T, "val")(key, val));
+		return val;
+	}
+
+	void resize()
+	{
+		LinkedList!(Tuple!(string, "key", T, "val"))*[] newList;
+
+		newList.length = this.arr.length * 2;
+		foreach (item; this.items())
+			this.assign(item.key, item.val, newList);
+
+		this.free();
+
+		this.arr = newList;
+	}
+
+	void free()
 	{
 		foreach (i; 0 .. this.arr.length)
 			if (!(this.arr[i] is null))
 				freeList(this.arr[i]);
 	}
 
-}
-
-import std.random : uniform;
-
-void main()
-{
-	DynamicArray!int arr;
-	int[] copy;
-	HashTable!int dict;
-	string[] words;
-
-	arr = new DynamicArray!int;
-	dict = new HashTable!int(400000);
-	int[string] vals;
-	words = readFile("words.txt").split("\n");
-
-	foreach (i; 0 .. 399999)
+	~this()
 	{
-		int val = uniform(-500, 500);
-		string key = words[i];
-		dict.assign(key, val);
-		vals[key] = val;
+		this.free();
 	}
-
-	foreach (key, val; vals)
-		assert(dict.get(key) == val);
-	foreach (i; 0 .. 5000000)
-	{
-		int val = uniform(-10000, 10000);
-		arr.append(val);
-		copy ~= val;
-	}
-	foreach (i; 0 .. arr.length)
-		assert(arr[i] == copy[i], "Failed to get values");
-
 
 }
